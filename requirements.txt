@@ -1,0 +1,6 @@
+# Install via pip after activating the conda env.
+# For full install use: pip install -e ".[dev]"
+google-adk[a2a]
+a2a-settlement
+httpx
+
