@@ -35,6 +35,7 @@ import time
 from typing import Any, Callable
 
 from .config import SettlementConfig
+from .errors import SettlementError, SettlementErrorCode
 from .interceptors import MandateInterceptors
 from .mandates import (
     CartMandate,
@@ -152,6 +153,14 @@ class EdgeGateway:
         except MediatorError as exc:
             logger.error("Mediator attestation failed: %s", exc)
             payment.status = MandateStatus.REJECTED
+            payment.error = SettlementError(
+                SettlementErrorCode.ATTESTATION_FAILED,
+                f"Mediator attestation failed: {exc}",
+                data={
+                    "intent_mandate_id": intent.mandate_id,
+                    "cart_mandate_id": cart.mandate_id,
+                },
+            ).to_dict()
             self._last_payment = payment
             return payment
 
@@ -170,6 +179,14 @@ class EdgeGateway:
                 "; ".join(verification.errors),
             )
             payment.status = MandateStatus.REJECTED
+            payment.error = SettlementError(
+                SettlementErrorCode.VERIFICATION_FAILED,
+                "; ".join(verification.errors),
+                data={
+                    "attestation_id": attestation.attestation_id,
+                    "verification_errors": verification.errors,
+                },
+            ).to_dict()
             self._last_payment = payment
 
             if self._on_payment_rejected:

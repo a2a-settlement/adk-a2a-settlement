@@ -26,8 +26,23 @@ from typing import Any
 from a2a_settlement.client import SettlementExchangeClient
 
 from .config import SettlementConfig
+from .errors import SettlementError, SettlementErrorCode
 
 logger = logging.getLogger("adk_a2a_settlement.tools")
+
+
+def _format_tool_error(exc: Exception) -> str:
+    """Format an exception as a tool-friendly string.
+
+    For SettlementErrors the JSON-RPC code is included so downstream
+    orchestrators can still parse it even when the LLM is in the loop.
+    """
+    if isinstance(exc, SettlementError):
+        parts = [f"[{exc.code.name} ({int(exc.code)})] {exc.message}"]
+        if exc.data:
+            parts.append(f"  Details: {exc.data}")
+        return "\n".join(parts)
+    return str(exc)
 
 
 def create_settlement_tools(
@@ -58,7 +73,7 @@ def create_settlement_tools(
                 f"  Reputation: {bal.get('reputation', 0.5)}"
             )
         except Exception as exc:
-            return f"Failed to check balance: {exc}"
+            return f"Failed to check balance: {_format_tool_error(exc)}"
 
     def create_escrow(
         provider_id: str,
@@ -96,7 +111,14 @@ def create_settlement_tools(
                 f"  Expires: {result.get('expires_at')}"
             )
         except Exception as exc:
-            return f"Failed to create escrow: {exc}"
+            exc_str = str(exc).lower()
+            if "insufficient" in exc_str or "balance" in exc_str:
+                se = SettlementError(
+                    SettlementErrorCode.INSUFFICIENT_FUNDS,
+                    data={"provider_id": provider_id, "requested_amount": amount},
+                )
+                return f"Failed to create escrow: {_format_tool_error(se)}"
+            return f"Failed to create escrow: {_format_tool_error(exc)}"
 
     def release_escrow(escrow_id: str) -> str:
         """Release an escrow to pay the provider after successful task completion.
@@ -116,7 +138,20 @@ def create_settlement_tools(
                 f"  Provider: {result.get('provider_id')}"
             )
         except Exception as exc:
-            return f"Failed to release escrow: {exc}"
+            exc_str = str(exc).lower()
+            if "not found" in exc_str:
+                se = SettlementError(
+                    SettlementErrorCode.ESCROW_NOT_FOUND,
+                    data={"escrow_id": escrow_id},
+                )
+                return f"Failed to release escrow: {_format_tool_error(se)}"
+            if "already" in exc_str or "released" in exc_str or "refunded" in exc_str:
+                se = SettlementError(
+                    SettlementErrorCode.ESCROW_ALREADY_SETTLED,
+                    data={"escrow_id": escrow_id},
+                )
+                return f"Failed to release escrow: {_format_tool_error(se)}"
+            return f"Failed to release escrow: {_format_tool_error(exc)}"
 
     def refund_escrow(escrow_id: str, reason: str = "") -> str:
         """Refund an escrow to return tokens after task failure.
@@ -137,7 +172,20 @@ def create_settlement_tools(
                 f"  Requester: {result.get('requester_id')}"
             )
         except Exception as exc:
-            return f"Failed to refund escrow: {exc}"
+            exc_str = str(exc).lower()
+            if "not found" in exc_str:
+                se = SettlementError(
+                    SettlementErrorCode.ESCROW_NOT_FOUND,
+                    data={"escrow_id": escrow_id},
+                )
+                return f"Failed to refund escrow: {_format_tool_error(se)}"
+            if "already" in exc_str or "released" in exc_str or "refunded" in exc_str:
+                se = SettlementError(
+                    SettlementErrorCode.ESCROW_ALREADY_SETTLED,
+                    data={"escrow_id": escrow_id},
+                )
+                return f"Failed to refund escrow: {_format_tool_error(se)}"
+            return f"Failed to refund escrow: {_format_tool_error(exc)}"
 
     def dispute_escrow(escrow_id: str, reason: str) -> str:
         """Dispute an escrow when the provider's deliverable is unsatisfactory.
@@ -159,7 +207,7 @@ def create_settlement_tools(
                 f"  A mediator will evaluate and resolve the dispute."
             )
         except Exception as exc:
-            return f"Failed to dispute escrow: {exc}"
+            return f"Failed to dispute escrow: {_format_tool_error(exc)}"
 
     def lookup_agent(skill: str = "") -> str:
         """Look up agents in the exchange directory, optionally filtered by skill.
@@ -184,7 +232,7 @@ def create_settlement_tools(
                 )
             return "\n".join(lines)
         except Exception as exc:
-            return f"Failed to lookup agents: {exc}"
+            return f"Failed to lookup agents: {_format_tool_error(exc)}"
 
     def get_escrow_status(escrow_id: str) -> str:
         """Check the current status of an escrow.
@@ -215,7 +263,13 @@ def create_settlement_tools(
                     lines.append(f"    {i}. {d.get('description', 'N/A')}")
             return "\n".join(lines)
         except Exception as exc:
-            return f"Failed to get escrow status: {exc}"
+            if "not found" in str(exc).lower():
+                se = SettlementError(
+                    SettlementErrorCode.ESCROW_NOT_FOUND,
+                    data={"escrow_id": escrow_id},
+                )
+                return f"Failed to get escrow status: {_format_tool_error(se)}"
+            return f"Failed to get escrow status: {_format_tool_error(exc)}"
 
     return [
         check_balance,

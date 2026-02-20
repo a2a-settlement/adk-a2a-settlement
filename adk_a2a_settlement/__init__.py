@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 from .callbacks import SettlementCallbacks
 from .config import SettlementConfig
+from .errors import SettlementError, SettlementErrorCode
 from .gateway import EdgeGateway
 from .interceptors import MandateInterceptors
 from .mandates import (
@@ -28,13 +29,16 @@ from .mediator import (
     verify_rfc3161_timestamp,
 )
 from .provider import to_settled_a2a, verify_escrow
-from .requester import SettledRemoteAgent, SettlementInfo, discover_settlement
+from .requester import EscrowTTLWatchdog, SettledRemoteAgent, SettlementInfo, discover_settlement
 from .tools import create_settlement_tools
 
 __all__ = [
     "__version__",
     # Config
     "SettlementConfig",
+    # Errors (JSON-RPC -32000 to -32099)
+    "SettlementError",
+    "SettlementErrorCode",
     # Edge gateway
     "EdgeGateway",
     "MandateInterceptors",
@@ -58,8 +62,9 @@ __all__ = [
     # Provider
     "to_settled_a2a",
     "verify_escrow",
-    # Requester
+    # Requester + TTL watchdog
     "SettledRemoteAgent",
+    "EscrowTTLWatchdog",
     "SettlementInfo",
     "discover_settlement",
     # Tools & callbacks

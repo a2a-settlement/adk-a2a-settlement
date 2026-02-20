@@ -28,8 +28,10 @@ Usage:
 from __future__ import annotations
 
 import logging
+import threading
+import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 import httpx
 
@@ -37,6 +39,7 @@ from a2a_settlement.client import SettlementExchangeClient
 from a2a_settlement.metadata import build_settlement_metadata
 
 from .config import SettlementConfig
+from .errors import SettlementError, SettlementErrorCode
 
 logger = logging.getLogger("adk_a2a_settlement.requester")
 
@@ -112,6 +115,123 @@ def discover_settlement(agent_card_url: str, *, timeout: float = 10.0) -> Settle
     return None
 
 
+class EscrowTTLWatchdog:
+    """
+    Background watchdog that auto-refunds escrows exceeding the local
+    settlement TTL, freeing worker threads blocked on payment wait-states.
+
+    The watchdog runs a single daemon thread that wakes periodically
+    (every ``poll_interval_seconds``) and checks for expired entries.
+    Expired escrows are refunded via the exchange and an optional
+    ``on_expired`` callback is fired so higher-level orchestrators can
+    react (e.g. cancel an ADK task).
+    """
+
+    def __init__(
+        self,
+        exchange: SettlementExchangeClient,
+        ttl_minutes: int = 15,
+        poll_interval_seconds: float = 30.0,
+        on_expired: Callable[[str, str, dict[str, Any]], None] | None = None,
+    ):
+        self._exchange = exchange
+        self._ttl_seconds = ttl_minutes * 60
+        self._poll_interval = poll_interval_seconds
+        self._on_expired = on_expired
+
+        self._tracked: dict[str, _TrackedEscrow] = {}
+        self._lock = threading.Lock()
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        """Start the background watchdog thread (idempotent)."""
+        if self._thread and self._thread.is_alive():
+            return
+        self._stop_event.clear()
+        self._thread = threading.Thread(
+            target=self._run, name="escrow-ttl-watchdog", daemon=True
+        )
+        self._thread.start()
+        logger.debug("TTL watchdog started (ttl=%ds, poll=%ds)", self._ttl_seconds, self._poll_interval)
+
+    def stop(self) -> None:
+        """Signal the watchdog to stop and wait for it to finish."""
+        self._stop_event.set()
+        if self._thread:
+            self._thread.join(timeout=self._poll_interval + 2)
+            self._thread = None
+        logger.debug("TTL watchdog stopped")
+
+    @property
+    def is_running(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
+    def track(self, task_id: str, escrow: dict[str, Any]) -> None:
+        """Register an escrow for TTL monitoring."""
+        with self._lock:
+            self._tracked[task_id] = _TrackedEscrow(
+                task_id=task_id,
+                escrow_id=escrow["escrow_id"],
+                escrow=escrow,
+                created_at=time.monotonic(),
+            )
+
+    def untrack(self, task_id: str) -> None:
+        """Remove a task from monitoring (called on normal release/refund)."""
+        with self._lock:
+            self._tracked.pop(task_id, None)
+
+    def tracked_count(self) -> int:
+        with self._lock:
+            return len(self._tracked)
+
+    def _run(self) -> None:
+        while not self._stop_event.is_set():
+            self._sweep()
+            self._stop_event.wait(timeout=self._poll_interval)
+
+    def _sweep(self) -> None:
+        now = time.monotonic()
+        expired: list[_TrackedEscrow] = []
+
+        with self._lock:
+            for tid, entry in list(self._tracked.items()):
+                if (now - entry.created_at) >= self._ttl_seconds:
+                    expired.append(entry)
+                    del self._tracked[tid]
+
+        for entry in expired:
+            self._expire(entry)
+
+    def _expire(self, entry: _TrackedEscrow) -> None:
+        logger.warning(
+            "Settlement TTL exceeded — auto-refunding escrow %s for task %s",
+            entry.escrow_id, entry.task_id,
+        )
+        try:
+            self._exchange.refund_escrow(
+                escrow_id=entry.escrow_id,
+                reason="Settlement TTL exceeded — auto-released by watchdog",
+            )
+        except Exception as exc:
+            logger.error("Watchdog refund failed for %s: %s", entry.escrow_id, exc)
+
+        if self._on_expired:
+            try:
+                self._on_expired(entry.task_id, entry.escrow_id, entry.escrow)
+            except Exception as exc:
+                logger.error("on_expired callback failed for %s: %s", entry.task_id, exc)
+
+
+@dataclass
+class _TrackedEscrow:
+    task_id: str
+    escrow_id: str
+    escrow: dict[str, Any]
+    created_at: float
+
+
 class SettledRemoteAgent:
     """
     A settlement-aware wrapper for ADK's RemoteA2aAgent.
@@ -119,6 +239,10 @@ class SettledRemoteAgent:
     On construction, reads the settlement extension from the provider's
     AgentCard. Provides methods to create escrow, release, and refund
     around remote agent calls.
+
+    When ``settlement_ttl_minutes`` is set (via config or constructor),
+    a background ``EscrowTTLWatchdog`` auto-refunds escrows that exceed
+    the TTL and frees blocked resources.
 
     Can be used as a sub_agent in an ADK Agent by accessing the
     inner `.remote_agent` property, which is the real RemoteA2aAgent.
@@ -133,6 +257,7 @@ class SettledRemoteAgent:
         config: SettlementConfig | None = None,
         timeout: float = 300.0,
         httpx_client: Any | None = None,
+        on_escrow_expired: Callable[[str, str, dict[str, Any]], None] | None = None,
     ):
         from google.adk.agents.remote_a2a_agent import RemoteA2aAgent
 
@@ -141,7 +266,6 @@ class SettledRemoteAgent:
         self.agent_card_url = agent_card
         self._config = config or SettlementConfig()
 
-        # Create the underlying RemoteA2aAgent
         self._remote_agent = RemoteA2aAgent(
             name=name,
             description=description,
@@ -150,13 +274,11 @@ class SettledRemoteAgent:
             httpx_client=httpx_client,
         )
 
-        # Initialize exchange client
         self._exchange = SettlementExchangeClient(
             base_url=self._config.exchange_url,
             api_key=self._config.api_key,
         )
 
-        # Discover settlement info from agent card
         self._settlement_info: SettlementInfo | None = None
         if self._config.auto_escrow:
             self._settlement_info = discover_settlement(agent_card)
@@ -171,8 +293,32 @@ class SettledRemoteAgent:
             else:
                 logger.info("No settlement extension found for %s", name)
 
-        # Track active escrows for this agent
         self._active_escrows: dict[str, dict[str, Any]] = {}
+        self._escrow_lock = threading.Lock()
+
+        # TTL watchdog
+        self._watchdog: EscrowTTLWatchdog | None = None
+        ttl = self._config.settlement_ttl_minutes
+        if ttl and ttl > 0:
+            self._watchdog = EscrowTTLWatchdog(
+                exchange=self._exchange,
+                ttl_minutes=ttl,
+                on_expired=self._on_ttl_expired,
+            )
+            self._watchdog.start()
+
+        self._on_escrow_expired = on_escrow_expired
+
+    def _on_ttl_expired(self, task_id: str, escrow_id: str, escrow: dict[str, Any]) -> None:
+        """Internal callback when the watchdog expires an escrow."""
+        with self._escrow_lock:
+            self._active_escrows.pop(task_id, None)
+        logger.warning(
+            "Task %s auto-released due to settlement TTL (%d min)",
+            task_id, self._config.settlement_ttl_minutes,
+        )
+        if self._on_escrow_expired:
+            self._on_escrow_expired(task_id, escrow_id, escrow)
 
     @property
     def remote_agent(self) -> Any:
@@ -183,6 +329,11 @@ class SettledRemoteAgent:
     def settlement_info(self) -> SettlementInfo | None:
         """Parsed settlement info from the provider's AgentCard."""
         return self._settlement_info
+
+    @property
+    def watchdog(self) -> EscrowTTLWatchdog | None:
+        """The TTL watchdog, if active."""
+        return self._watchdog
 
     def create_escrow(
         self,
@@ -198,34 +349,59 @@ class SettledRemoteAgent:
 
         If amount is None, looks up pricing from the agent card.
         Returns the escrow response dict with escrow_id.
+
+        Raises:
+            SettlementError(SETTLEMENT_NOT_ADVERTISED) if the agent
+                doesn't have settlement capabilities.
+            SettlementError(INSUFFICIENT_FUNDS) when the exchange
+                rejects the escrow for balance reasons.
+            SettlementError(PAYMENT_FAILED) on other exchange errors.
         """
         if not self._settlement_info:
-            raise RuntimeError(f"Agent {self.name} does not advertise settlement")
+            raise SettlementError(
+                SettlementErrorCode.SETTLEMENT_NOT_ADVERTISED,
+                data={"agent": self.name},
+            )
 
-        # Determine amount from pricing or parameter
         if amount is None:
             pricing = self._settlement_info.pricing
             if task_type and task_type in pricing:
                 amount = int(pricing[task_type].get("baseTokens", 10))
             else:
-                # Use first pricing entry or default
                 for _, p in pricing.items():
                     amount = int(p.get("baseTokens", 10))
                     break
                 else:
-                    amount = 10  # fallback
+                    amount = 10
 
-        escrow = self._exchange.create_escrow(
-            provider_id=self._settlement_info.account_id,
-            amount=amount,
-            task_id=task_id,
-            task_type=task_type,
-            ttl_minutes=ttl_minutes or self._config.default_ttl_minutes,
-            deliverables=deliverables,
-        )
+        try:
+            escrow = self._exchange.create_escrow(
+                provider_id=self._settlement_info.account_id,
+                amount=amount,
+                task_id=task_id,
+                task_type=task_type,
+                ttl_minutes=ttl_minutes or self._config.default_ttl_minutes,
+                deliverables=deliverables,
+            )
+        except Exception as exc:
+            exc_str = str(exc).lower()
+            if "insufficient" in exc_str or "balance" in exc_str:
+                raise SettlementError(
+                    SettlementErrorCode.INSUFFICIENT_FUNDS,
+                    data={"agent": self.name, "requested_amount": amount, "detail": str(exc)},
+                ) from exc
+            raise SettlementError(
+                SettlementErrorCode.PAYMENT_FAILED,
+                f"Escrow creation failed for task {task_id}",
+                data={"agent": self.name, "amount": amount, "detail": str(exc)},
+            ) from exc
 
         escrow_id = escrow["escrow_id"]
-        self._active_escrows[task_id] = escrow
+        with self._escrow_lock:
+            self._active_escrows[task_id] = escrow
+
+        if self._watchdog:
+            self._watchdog.track(task_id, escrow)
 
         logger.info(
             "Escrow created: id=%s agent=%s amount=%d task=%s",
@@ -245,32 +421,62 @@ class SettledRemoteAgent:
         )
 
     def release(self, task_id: str) -> dict[str, Any]:
-        """Release escrow for a completed task."""
-        escrow = self._active_escrows.get(task_id)
+        """Release escrow for a completed task.
+
+        Raises:
+            SettlementError(ESCROW_NOT_FOUND) if no active escrow for task.
+        """
+        with self._escrow_lock:
+            escrow = self._active_escrows.get(task_id)
         if not escrow:
-            raise ValueError(f"No active escrow for task {task_id}")
+            raise SettlementError(
+                SettlementErrorCode.ESCROW_NOT_FOUND,
+                f"No active escrow for task {task_id}",
+                data={"task_id": task_id, "agent": self.name},
+            )
 
         result = self._exchange.release_escrow(escrow_id=escrow["escrow_id"])
-        del self._active_escrows[task_id]
+        with self._escrow_lock:
+            self._active_escrows.pop(task_id, None)
+        if self._watchdog:
+            self._watchdog.untrack(task_id)
 
         logger.info("Escrow released: task=%s escrow=%s", task_id, escrow["escrow_id"])
         return result
 
     def refund(self, task_id: str, reason: str = "") -> dict[str, Any]:
-        """Refund escrow for a failed task."""
-        escrow = self._active_escrows.get(task_id)
+        """Refund escrow for a failed task.
+
+        Raises:
+            SettlementError(ESCROW_NOT_FOUND) if no active escrow for task.
+        """
+        with self._escrow_lock:
+            escrow = self._active_escrows.get(task_id)
         if not escrow:
-            raise ValueError(f"No active escrow for task {task_id}")
+            raise SettlementError(
+                SettlementErrorCode.ESCROW_NOT_FOUND,
+                f"No active escrow for task {task_id}",
+                data={"task_id": task_id, "agent": self.name},
+            )
 
         result = self._exchange.refund_escrow(
             escrow_id=escrow["escrow_id"],
             reason=reason[:256] if reason else "Task failed",
         )
-        del self._active_escrows[task_id]
+        with self._escrow_lock:
+            self._active_escrows.pop(task_id, None)
+        if self._watchdog:
+            self._watchdog.untrack(task_id)
 
         logger.info("Escrow refunded: task=%s escrow=%s reason=%s", task_id, escrow["escrow_id"], reason[:80])
         return result
 
     def get_active_escrows(self) -> dict[str, dict[str, Any]]:
         """Return all active (unreleased/unrefunded) escrows."""
-        return dict(self._active_escrows)
+        with self._escrow_lock:
+            return dict(self._active_escrows)
+
+    def shutdown(self) -> None:
+        """Stop the TTL watchdog. Safe to call multiple times."""
+        if self._watchdog:
+            self._watchdog.stop()

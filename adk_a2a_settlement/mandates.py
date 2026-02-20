@@ -128,6 +128,8 @@ class PaymentMandate(BaseModel):
     The final AP2 payment instruction released to the payment processor.
 
     Only constructed after cryptographic verification of the attestation.
+    When ``status`` is ``REJECTED``, the ``error`` dict carries a
+    JSON-RPC 2.0 error object with code, message, and optional data.
     """
 
     mandate_id: str = Field(default_factory=lambda: f"pay-{uuid.uuid4().hex[:12]}")
@@ -137,5 +139,6 @@ class PaymentMandate(BaseModel):
     escrow_ids: list[str] = Field(default_factory=list)
     total_tokens: int = 0
     status: MandateStatus = MandateStatus.VERIFIED
+    error: dict[str, Any] | None = None
     released_at: float = 0.0
     timestamp: float = Field(default_factory=time.time)

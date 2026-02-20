@@ -23,11 +23,12 @@ Usage:
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Callable
 
 from a2a_settlement.client import SettlementExchangeClient
 
 from .config import SettlementConfig
+from .errors import SettlementError, SettlementErrorCode
 from .requester import SettledRemoteAgent
 
 logger = logging.getLogger("adk_a2a_settlement.callbacks")
@@ -39,18 +40,26 @@ class SettlementCallbacks:
 
     Tracks SettledRemoteAgent instances and manages their escrow
     lifecycle through ADK's callback system.
+
+    When ``settlement_ttl_minutes > 0`` in the config, every registered
+    ``SettledRemoteAgent`` will have its own ``EscrowTTLWatchdog`` that
+    auto-refunds escrows exceeding the TTL. The ``on_escrow_expired``
+    callback fires whenever a watchdog expires an escrow, giving
+    higher-level orchestrators a chance to cancel in-flight work.
     """
 
     def __init__(
         self,
         config: SettlementConfig | None = None,
         settled_agents: list[SettledRemoteAgent] | None = None,
+        on_escrow_expired: Callable[[str, str, str, dict[str, Any]], None] | None = None,
     ):
         self._config = config or SettlementConfig()
         self._exchange = SettlementExchangeClient(
             base_url=self._config.exchange_url,
             api_key=self._config.api_key,
         )
+        self._on_escrow_expired = on_escrow_expired
         self._settled_agents: dict[str, SettledRemoteAgent] = {}
         for agent in (settled_agents or []):
             self._settled_agents[agent.name] = agent
@@ -68,9 +77,6 @@ class SettlementCallbacks:
 
         Returns None to continue normal execution, or a response to short-circuit.
         """
-        # ADK before_model_callback receives the callback context and LLM request
-        # We can inspect tool calls being planned, but at this stage the model
-        # hasn't decided yet. This is primarily for logging/auditing.
         logger.debug("Before model callback invoked")
         return None
 
@@ -92,7 +98,7 @@ class SettlementCallbacks:
         task_id: str,
         success: bool,
         reason: str = "",
-    ) -> dict[str, Any] | None:
+    ) -> dict[str, Any]:
         """
         Manually settle a task for a named SettledRemoteAgent.
 
@@ -105,33 +111,40 @@ class SettlementCallbacks:
             reason: Reason for refund (if not success).
 
         Returns:
-            Settlement result dict, or None if agent not found.
+            Settlement result dict.
+
+        Raises:
+            SettlementError(ESCROW_NOT_FOUND) when agent or escrow is missing.
         """
         agent = self._settled_agents.get(agent_name)
         if not agent:
-            logger.warning("No settled agent found: %s", agent_name)
-            return None
-
-        try:
-            if success:
-                return agent.release(task_id)
-            else:
-                return agent.refund(task_id, reason=reason)
-        except Exception as exc:
-            logger.error(
-                "Settlement failed: agent=%s task=%s success=%s error=%s",
-                agent_name, task_id, success, exc,
+            raise SettlementError(
+                SettlementErrorCode.ESCROW_NOT_FOUND,
+                f"No settled agent registered with name '{agent_name}'",
+                data={"agent_name": agent_name, "registered": list(self._settled_agents.keys())},
             )
-            return None
+
+        if success:
+            return agent.release(task_id)
+        else:
+            return agent.refund(task_id, reason=reason)
 
     def get_summary(self) -> dict[str, Any]:
         """Return a summary of all tracked agents and their active escrows."""
         summary: dict[str, Any] = {}
         for name, agent in self._settled_agents.items():
             escrows = agent.get_active_escrows()
+            watchdog_active = agent.watchdog.is_running if agent.watchdog else False
             summary[name] = {
                 "settlement_info": agent.settlement_info.__dict__ if agent.settlement_info else None,
                 "active_escrows": len(escrows),
                 "escrow_ids": list(escrows.keys()),
+                "ttl_watchdog_active": watchdog_active,
             }
         return summary
+
+    def shutdown(self) -> None:
+        """Stop all TTL watchdogs. Call this on application shutdown."""
+        for agent in self._settled_agents.values():
+            agent.shutdown()
+        logger.info("All settlement watchdogs stopped")

@@ -30,6 +30,7 @@ from a2a_settlement.client import SettlementExchangeClient
 from a2a_settlement.metadata import get_settlement_block
 
 from .config import SettlementConfig
+from .errors import SettlementError, SettlementErrorCode
 
 logger = logging.getLogger("adk_a2a_settlement.provider")
 
@@ -123,24 +124,41 @@ def to_settled_a2a(
 def verify_escrow(
     agent: Any,
     message: Any,
+    *,
+    raise_on_error: bool = False,
 ) -> dict[str, Any] | None:
     """
     Verify that an incoming A2A message has a valid escrow.
 
     Call this in your agent's execution logic to check settlement
-    before doing work. Returns the escrow detail dict or None.
+    before doing work. Returns the escrow detail dict, or None when
+    ``raise_on_error=False`` (the default, for backward compatibility).
 
-    Usage in an ADK agent tool or before_model_callback:
-        escrow = verify_escrow(agent, context.message)
-        if not escrow:
-            return "No valid escrow found. Please create escrow first."
+    When ``raise_on_error=True``, raises a ``SettlementError`` with a
+    JSON-RPC code that client orchestrators can match programmatically.
+
+    Usage in an ADK agent tool or before_model_callback::
+
+        escrow = verify_escrow(agent, context.message, raise_on_error=True)
     """
     se_block = get_settlement_block(message)
     if not se_block:
+        if raise_on_error:
+            raise SettlementError(
+                SettlementErrorCode.ESCROW_NOT_FOUND,
+                "Message contains no settlement metadata",
+                data={"escrow_id": None},
+            )
         return None
 
     escrow_id = se_block.get("escrowId")
     if not escrow_id:
+        if raise_on_error:
+            raise SettlementError(
+                SettlementErrorCode.ESCROW_NOT_FOUND,
+                "Settlement metadata present but missing escrowId",
+                data={"settlement_block": se_block},
+            )
         return None
 
     exchange: SettlementExchangeClient | None = getattr(agent, "_settlement_exchange", None)
@@ -148,17 +166,53 @@ def verify_escrow(
 
     if not exchange:
         logger.warning("No exchange client on agent %s", getattr(agent, "name", "?"))
+        if raise_on_error:
+            raise SettlementError(
+                SettlementErrorCode.SETTLEMENT_NOT_ADVERTISED,
+                data={"agent": getattr(agent, "name", "?")},
+            )
         return None
 
     try:
         escrow = exchange.get_escrow(escrow_id=escrow_id)
     except Exception as exc:
         logger.warning("Failed to fetch escrow %s: %s", escrow_id, exc)
+        if raise_on_error:
+            raise SettlementError(
+                SettlementErrorCode.ESCROW_NOT_FOUND,
+                f"Exchange returned an error for escrow {escrow_id}",
+                data={"escrow_id": escrow_id, "detail": str(exc)},
+            ) from exc
         return None
 
-    # Verify the escrow is held and assigned to this provider
-    if escrow.get("status") != "held":
-        logger.warning("Escrow %s is not held (status=%s)", escrow_id, escrow.get("status"))
+    status = escrow.get("status")
+
+    if status in ("released", "refunded"):
+        logger.warning("Escrow %s already settled (status=%s)", escrow_id, status)
+        if raise_on_error:
+            raise SettlementError(
+                SettlementErrorCode.ESCROW_ALREADY_SETTLED,
+                data={"escrow_id": escrow_id, "status": status},
+            )
+        return None
+
+    if status == "expired":
+        logger.warning("Escrow %s has expired", escrow_id)
+        if raise_on_error:
+            raise SettlementError(
+                SettlementErrorCode.ESCROW_EXPIRED,
+                data={"escrow_id": escrow_id},
+            )
+        return None
+
+    if status != "held":
+        logger.warning("Escrow %s is not held (status=%s)", escrow_id, status)
+        if raise_on_error:
+            raise SettlementError(
+                SettlementErrorCode.PAYMENT_PENDING,
+                f"Escrow {escrow_id} status is '{status}', expected 'held'",
+                data={"escrow_id": escrow_id, "status": status},
+            )
         return None
 
     if account_id and escrow.get("provider_id") != account_id:
@@ -166,6 +220,15 @@ def verify_escrow(
             "Escrow %s provider mismatch: expected=%s actual=%s",
             escrow_id, account_id, escrow.get("provider_id"),
         )
+        if raise_on_error:
+            raise SettlementError(
+                SettlementErrorCode.PROVIDER_MISMATCH,
+                data={
+                    "escrow_id": escrow_id,
+                    "expected_provider": account_id,
+                    "actual_provider": escrow.get("provider_id"),
+                },
+            )
         return None
 
     logger.info("Escrow %s verified: amount=%s", escrow_id, escrow.get("amount"))
