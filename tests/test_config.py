@@ -49,3 +49,25 @@ class TestSettlementConfig:
 
         with pytest.raises(ValueError, match="timeout_seconds must be between"):
             SettlementConfig(api_key="test", timeout_seconds=999)
+
+    def test_state_store_defaults(self):
+        with patch.dict(os.environ, {}, clear=True):
+            cfg = SettlementConfig(api_key="test")
+            assert cfg.state_store_type == "memory"
+            assert cfg.redis_url == "redis://localhost:6379/0"
+            assert cfg.redis_prefix == "a2ase"
+
+    def test_state_store_redis(self):
+        cfg = SettlementConfig(
+            api_key="test",
+            state_store_type="redis",
+            redis_url="redis://prod:6379/1",
+            redis_prefix="myapp",
+        )
+        assert cfg.state_store_type == "redis"
+        assert cfg.redis_url == "redis://prod:6379/1"
+        assert cfg.redis_prefix == "myapp"
+
+    def test_invalid_state_store_type(self):
+        with pytest.raises(ValueError, match="state_store_type"):
+            SettlementConfig(api_key="test", state_store_type="postgres")

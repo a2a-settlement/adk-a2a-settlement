@@ -41,6 +41,19 @@ class SettlementConfig(BaseModel):
     default_ttl_minutes: int = int(os.getenv("A2ASE_DEFAULT_TTL", "60"))
     settlement_ttl_minutes: int = int(os.getenv("A2ASE_SETTLEMENT_TTL", "15"))
 
+    # State store
+    state_store_type: str = os.getenv("A2ASE_STATE_STORE", "memory")
+    redis_url: str = os.getenv("A2ASE_REDIS_URL", "redis://localhost:6379/0")
+    redis_prefix: str = os.getenv("A2ASE_REDIS_PREFIX", "a2ase")
+
+    @field_validator("state_store_type")
+    @classmethod
+    def validate_state_store_type(cls, v: str) -> str:
+        allowed = {"memory", "redis"}
+        if v not in allowed:
+            raise ValueError(f"state_store_type must be one of {allowed}, got '{v}'")
+        return v
+
     @field_validator("network")
     @classmethod
     def validate_network(cls, v: str) -> str:

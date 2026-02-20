@@ -30,7 +30,7 @@ from a2a_settlement.client import SettlementExchangeClient
 from a2a_settlement.metadata import get_settlement_block
 
 from .config import SettlementConfig
-from .errors import SettlementError, SettlementErrorCode
+from .errors import SettlementError, SettlementErrorCode, classify_exchange_error
 
 logger = logging.getLogger("adk_a2a_settlement.provider")
 
@@ -178,8 +178,9 @@ def verify_escrow(
     except Exception as exc:
         logger.warning("Failed to fetch escrow %s: %s", escrow_id, exc)
         if raise_on_error:
+            code = classify_exchange_error(exc)
             raise SettlementError(
-                SettlementErrorCode.ESCROW_NOT_FOUND,
+                code,
                 f"Exchange returned an error for escrow {escrow_id}",
                 data={"escrow_id": escrow_id, "detail": str(exc)},
             ) from exc

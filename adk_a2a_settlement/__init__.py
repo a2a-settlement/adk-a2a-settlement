@@ -6,7 +6,13 @@ __version__ = "0.2.0"
 
 from .callbacks import SettlementCallbacks
 from .config import SettlementConfig
-from .errors import SettlementError, SettlementErrorCode
+from .errors import SettlementError, SettlementErrorCode, classify_exchange_error
+from .state import (
+    AbstractStateStore,
+    InMemoryStateStore,
+    RedisStateStore,
+    create_state_store,
+)
 from .gateway import EdgeGateway
 from .interceptors import MandateInterceptors
 from .mandates import (
@@ -39,6 +45,12 @@ __all__ = [
     # Errors (JSON-RPC -32000 to -32099)
     "SettlementError",
     "SettlementErrorCode",
+    "classify_exchange_error",
+    # State store
+    "AbstractStateStore",
+    "InMemoryStateStore",
+    "RedisStateStore",
+    "create_state_store",
     # Edge gateway
     "EdgeGateway",
     "MandateInterceptors",

@@ -26,7 +26,7 @@ from typing import Any
 from a2a_settlement.client import SettlementExchangeClient
 
 from .config import SettlementConfig
-from .errors import SettlementError, SettlementErrorCode
+from .errors import SettlementError, SettlementErrorCode, classify_exchange_error
 
 logger = logging.getLogger("adk_a2a_settlement.tools")
 
@@ -111,14 +111,12 @@ def create_settlement_tools(
                 f"  Expires: {result.get('expires_at')}"
             )
         except Exception as exc:
-            exc_str = str(exc).lower()
-            if "insufficient" in exc_str or "balance" in exc_str:
-                se = SettlementError(
-                    SettlementErrorCode.INSUFFICIENT_FUNDS,
-                    data={"provider_id": provider_id, "requested_amount": amount},
-                )
-                return f"Failed to create escrow: {_format_tool_error(se)}"
-            return f"Failed to create escrow: {_format_tool_error(exc)}"
+            code = classify_exchange_error(exc)
+            se = SettlementError(
+                code,
+                data={"provider_id": provider_id, "requested_amount": amount},
+            )
+            return f"Failed to create escrow: {_format_tool_error(se)}"
 
     def release_escrow(escrow_id: str) -> str:
         """Release an escrow to pay the provider after successful task completion.
@@ -138,20 +136,9 @@ def create_settlement_tools(
                 f"  Provider: {result.get('provider_id')}"
             )
         except Exception as exc:
-            exc_str = str(exc).lower()
-            if "not found" in exc_str:
-                se = SettlementError(
-                    SettlementErrorCode.ESCROW_NOT_FOUND,
-                    data={"escrow_id": escrow_id},
-                )
-                return f"Failed to release escrow: {_format_tool_error(se)}"
-            if "already" in exc_str or "released" in exc_str or "refunded" in exc_str:
-                se = SettlementError(
-                    SettlementErrorCode.ESCROW_ALREADY_SETTLED,
-                    data={"escrow_id": escrow_id},
-                )
-                return f"Failed to release escrow: {_format_tool_error(se)}"
-            return f"Failed to release escrow: {_format_tool_error(exc)}"
+            code = classify_exchange_error(exc)
+            se = SettlementError(code, data={"escrow_id": escrow_id})
+            return f"Failed to release escrow: {_format_tool_error(se)}"
 
     def refund_escrow(escrow_id: str, reason: str = "") -> str:
         """Refund an escrow to return tokens after task failure.
@@ -172,20 +159,9 @@ def create_settlement_tools(
                 f"  Requester: {result.get('requester_id')}"
             )
         except Exception as exc:
-            exc_str = str(exc).lower()
-            if "not found" in exc_str:
-                se = SettlementError(
-                    SettlementErrorCode.ESCROW_NOT_FOUND,
-                    data={"escrow_id": escrow_id},
-                )
-                return f"Failed to refund escrow: {_format_tool_error(se)}"
-            if "already" in exc_str or "released" in exc_str or "refunded" in exc_str:
-                se = SettlementError(
-                    SettlementErrorCode.ESCROW_ALREADY_SETTLED,
-                    data={"escrow_id": escrow_id},
-                )
-                return f"Failed to refund escrow: {_format_tool_error(se)}"
-            return f"Failed to refund escrow: {_format_tool_error(exc)}"
+            code = classify_exchange_error(exc)
+            se = SettlementError(code, data={"escrow_id": escrow_id})
+            return f"Failed to refund escrow: {_format_tool_error(se)}"
 
     def dispute_escrow(escrow_id: str, reason: str) -> str:
         """Dispute an escrow when the provider's deliverable is unsatisfactory.
@@ -263,13 +239,9 @@ def create_settlement_tools(
                     lines.append(f"    {i}. {d.get('description', 'N/A')}")
             return "\n".join(lines)
         except Exception as exc:
-            if "not found" in str(exc).lower():
-                se = SettlementError(
-                    SettlementErrorCode.ESCROW_NOT_FOUND,
-                    data={"escrow_id": escrow_id},
-                )
-                return f"Failed to get escrow status: {_format_tool_error(se)}"
-            return f"Failed to get escrow status: {_format_tool_error(exc)}"
+            code = classify_exchange_error(exc)
+            se = SettlementError(code, data={"escrow_id": escrow_id})
+            return f"Failed to get escrow status: {_format_tool_error(se)}"
 
     return [
         check_balance,

@@ -30,6 +30,7 @@ from a2a_settlement.client import SettlementExchangeClient
 from .config import SettlementConfig
 from .errors import SettlementError, SettlementErrorCode
 from .requester import SettledRemoteAgent
+from .state import AbstractStateStore, create_state_store
 
 logger = logging.getLogger("adk_a2a_settlement.callbacks")
 
@@ -53,6 +54,8 @@ class SettlementCallbacks:
         config: SettlementConfig | None = None,
         settled_agents: list[SettledRemoteAgent] | None = None,
         on_escrow_expired: Callable[[str, str, str, dict[str, Any]], None] | None = None,
+        *,
+        state_store: AbstractStateStore | None = None,
     ):
         self._config = config or SettlementConfig()
         self._exchange = SettlementExchangeClient(
@@ -60,13 +63,20 @@ class SettlementCallbacks:
             api_key=self._config.api_key,
         )
         self._on_escrow_expired = on_escrow_expired
+        self._store = state_store or create_state_store(self._config)
+
+        # Live agent references (not serializable to Redis)
         self._settled_agents: dict[str, SettledRemoteAgent] = {}
         for agent in (settled_agents or []):
             self._settled_agents[agent.name] = agent
+            if agent.settlement_info:
+                self._store.set_agent(agent.name, agent.settlement_info.__dict__)
 
     def register_agent(self, agent: SettledRemoteAgent) -> None:
         """Register a SettledRemoteAgent for automatic settlement tracking."""
         self._settled_agents[agent.name] = agent
+        if agent.settlement_info:
+            self._store.set_agent(agent.name, agent.settlement_info.__dict__)
 
     def before_model(self, callback_context: Any, llm_request: Any) -> Any | None:
         """

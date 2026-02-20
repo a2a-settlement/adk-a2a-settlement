@@ -97,9 +97,26 @@ class MediatorClient:
                 )
                 resp.raise_for_status()
                 data = resp.json()
-        except httpx.HTTPStatusError as exc:
+        except httpx.TimeoutException as exc:
             raise MediatorError(
-                f"Mediator returned HTTP {exc.response.status_code}"
+                f"Mediator request timed out after {self._timeout}s"
+            ) from exc
+        except httpx.ConnectError as exc:
+            raise MediatorError(
+                f"Mediator unreachable at {self._url}: {exc}"
+            ) from exc
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code
+            if status == 429:
+                raise MediatorError(
+                    f"Mediator rate limited (HTTP 429)"
+                ) from exc
+            if status == 503:
+                raise MediatorError(
+                    f"Mediator unavailable (HTTP 503)"
+                ) from exc
+            raise MediatorError(
+                f"Mediator returned HTTP {status}"
             ) from exc
         except Exception as exc:
             raise MediatorError(f"Mediator request failed: {exc}") from exc

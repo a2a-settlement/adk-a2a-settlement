@@ -12,6 +12,7 @@ import pytest
 from adk_a2a_settlement.config import SettlementConfig
 from adk_a2a_settlement.errors import SettlementError, SettlementErrorCode
 from adk_a2a_settlement.requester import EscrowTTLWatchdog
+from adk_a2a_settlement.state import InMemoryStateStore
 
 
 class TestSettlementTTLConfig:
@@ -47,7 +48,10 @@ class TestEscrowTTLWatchdog:
 
     def test_start_and_stop(self):
         exchange = MagicMock()
-        watchdog = EscrowTTLWatchdog(exchange, ttl_minutes=1, poll_interval_seconds=0.1)
+        store = InMemoryStateStore()
+        watchdog = EscrowTTLWatchdog(
+            exchange, ttl_minutes=1, poll_interval_seconds=0.1, state_store=store,
+        )
 
         watchdog.start()
         assert watchdog.is_running
@@ -56,7 +60,10 @@ class TestEscrowTTLWatchdog:
 
     def test_start_is_idempotent(self):
         exchange = MagicMock()
-        watchdog = EscrowTTLWatchdog(exchange, ttl_minutes=1, poll_interval_seconds=0.1)
+        store = InMemoryStateStore()
+        watchdog = EscrowTTLWatchdog(
+            exchange, ttl_minutes=1, poll_interval_seconds=0.1, state_store=store,
+        )
         watchdog.start()
         thread1 = watchdog._thread
         watchdog.start()
@@ -65,7 +72,10 @@ class TestEscrowTTLWatchdog:
 
     def test_track_and_untrack(self):
         exchange = MagicMock()
-        watchdog = EscrowTTLWatchdog(exchange, ttl_minutes=10, poll_interval_seconds=60)
+        store = InMemoryStateStore()
+        watchdog = EscrowTTLWatchdog(
+            exchange, ttl_minutes=10, poll_interval_seconds=60, state_store=store,
+        )
 
         escrow = {"escrow_id": "esc-001", "amount": 100}
         watchdog.track("task-1", escrow)
@@ -82,22 +92,22 @@ class TestEscrowTTLWatchdog:
         def on_expired(task_id, escrow_id, escrow):
             expired_tasks.append(task_id)
 
-        # Use a very short TTL for testing (0.05 min = 3 seconds)
-        # but we'll monkey-patch the created_at to make it already expired
+        store = InMemoryStateStore()
         watchdog = EscrowTTLWatchdog(
             exchange,
             ttl_minutes=1,
             poll_interval_seconds=0.05,
             on_expired=on_expired,
+            state_store=store,
         )
 
         escrow = {"escrow_id": "esc-expired", "amount": 200}
         watchdog.track("task-expired", escrow)
 
         # Backdate the entry so it appears expired
-        with watchdog._lock:
-            entry = watchdog._tracked["task-expired"]
-            entry.created_at = time.monotonic() - 120  # 2 minutes ago
+        entry = store.get_tracked("task-expired")
+        entry["created_at"] = time.monotonic() - 120
+        store.set_tracked("task-expired", entry)
 
         watchdog.start()
         time.sleep(0.3)
@@ -113,9 +123,10 @@ class TestEscrowTTLWatchdog:
     def test_normal_escrows_not_expired(self):
         """Escrows within TTL are not touched."""
         exchange = MagicMock()
+        store = InMemoryStateStore()
 
         watchdog = EscrowTTLWatchdog(
-            exchange, ttl_minutes=60, poll_interval_seconds=0.05
+            exchange, ttl_minutes=60, poll_interval_seconds=0.05, state_store=store,
         )
 
         escrow = {"escrow_id": "esc-active", "amount": 100}
@@ -132,17 +143,18 @@ class TestEscrowTTLWatchdog:
         """Watchdog survives exchange failures during refund."""
         exchange = MagicMock()
         exchange.refund_escrow.side_effect = Exception("Network error")
+        store = InMemoryStateStore()
 
         watchdog = EscrowTTLWatchdog(
-            exchange, ttl_minutes=1, poll_interval_seconds=0.05
+            exchange, ttl_minutes=1, poll_interval_seconds=0.05, state_store=store,
         )
 
         escrow = {"escrow_id": "esc-fail", "amount": 50}
         watchdog.track("task-fail", escrow)
 
-        with watchdog._lock:
-            entry = watchdog._tracked["task-fail"]
-            entry.created_at = time.monotonic() - 120
+        entry = store.get_tracked("task-fail")
+        entry["created_at"] = time.monotonic() - 120
+        store.set_tracked("task-fail", entry)
 
         watchdog.start()
         time.sleep(0.3)
@@ -153,21 +165,22 @@ class TestEscrowTTLWatchdog:
     def test_callback_failure_does_not_crash(self):
         """Watchdog survives on_expired callback failures."""
         exchange = MagicMock()
+        store = InMemoryStateStore()
 
         def bad_callback(task_id, escrow_id, escrow):
             raise RuntimeError("callback boom")
 
         watchdog = EscrowTTLWatchdog(
             exchange, ttl_minutes=1, poll_interval_seconds=0.05,
-            on_expired=bad_callback,
+            on_expired=bad_callback, state_store=store,
         )
 
         escrow = {"escrow_id": "esc-cb-fail", "amount": 30}
         watchdog.track("task-cb-fail", escrow)
 
-        with watchdog._lock:
-            entry = watchdog._tracked["task-cb-fail"]
-            entry.created_at = time.monotonic() - 120
+        entry = store.get_tracked("task-cb-fail")
+        entry["created_at"] = time.monotonic() - 120
+        store.set_tracked("task-cb-fail", entry)
 
         watchdog.start()
         time.sleep(0.3)
@@ -265,8 +278,7 @@ class TestRequesterStructuredErrors:
                     agent.name = "test"
                     agent._config = SettlementConfig(api_key="k", settlement_ttl_minutes=0)
                     agent._settlement_info = None
-                    agent._active_escrows = {}
-                    agent._escrow_lock = threading.Lock()
+                    agent._store = InMemoryStateStore()
                     agent._exchange = MagicMock()
                     agent._watchdog = None
 
@@ -279,8 +291,7 @@ class TestRequesterStructuredErrors:
 
         agent = SettledRemoteAgent.__new__(SettledRemoteAgent)
         agent.name = "test"
-        agent._active_escrows = {}
-        agent._escrow_lock = threading.Lock()
+        agent._store = InMemoryStateStore()
         agent._watchdog = None
 
         with pytest.raises(SettlementError) as exc_info:

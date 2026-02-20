@@ -1,5 +1,5 @@
 """
-gateway.py — The Edge Gateway: ADK ↔ A2A ↔ Mediator ↔ Payment Processor.
+gateway.py — The Edge Gateway: ADK <-> A2A <-> Mediator <-> Payment Processor.
 
 Orchestrates the full AP2 mandate lifecycle:
 
@@ -49,6 +49,7 @@ from .mediator import (
     VerificationResult,
     verify_attestation,
 )
+from .state import AbstractStateStore, create_state_store
 
 logger = logging.getLogger("adk_a2a_settlement.gateway")
 
@@ -74,9 +75,12 @@ class EdgeGateway:
         trusted_roots: list[str] | None = None,
         on_payment_released: Callable[[PaymentMandate], Any] | None = None,
         on_payment_rejected: Callable[[PaymentMandate, VerificationResult], Any] | None = None,
+        state_store: AbstractStateStore | None = None,
     ):
         self._config = config or SettlementConfig()
         self._trusted_roots = trusted_roots
+
+        self._store = state_store or create_state_store(self._config)
 
         self._mediator = MediatorClient(
             mediator_url,
@@ -92,9 +96,6 @@ class EdgeGateway:
         self._on_payment_released = on_payment_released
         self._on_payment_rejected = on_payment_rejected
 
-        self._last_verification: VerificationResult | None = None
-        self._last_payment: PaymentMandate | None = None
-
     # ------------------------------------------------------------------
     # ADK callback — wired as after_model_callback
     # ------------------------------------------------------------------
@@ -106,7 +107,7 @@ class EdgeGateway:
     ) -> Any | None:
         """
         ADK ``after_model_callback`` that extracts the cart, then drives
-        the full attest → verify → release pipeline.
+        the full attest -> verify -> release pipeline.
 
         ``extract_cart`` fires ``on_mandates_ready`` (wired to
         ``process_mandates``) automatically when both mandates are
@@ -135,10 +136,30 @@ class EdgeGateway:
         """
         Run the full mandate pipeline synchronously:
 
-            mandates → mediator → verify → release / reject
+            mandates -> mediator -> verify -> release / reject
 
         Returns the resulting Payment Mandate (check its ``status``).
         """
+        if cart.intent_mandate_id != intent.mandate_id:
+            payment = PaymentMandate(
+                attestation_id="",
+                intent_mandate_id=intent.mandate_id,
+                cart_mandate_id=cart.mandate_id,
+                total_tokens=cart.total_tokens,
+                status=MandateStatus.REJECTED,
+            )
+            payment.error = SettlementError(
+                SettlementErrorCode.MANDATE_MISMATCH,
+                f"Cart references intent {cart.intent_mandate_id!r} "
+                f"but active intent is {intent.mandate_id!r}",
+                data={
+                    "cart_intent_ref": cart.intent_mandate_id,
+                    "active_intent": intent.mandate_id,
+                },
+            ).to_dict()
+            self._store.set_gateway_state("last_payment", payment.model_dump() if hasattr(payment, "model_dump") else payment.__dict__)
+            return payment
+
         payment = PaymentMandate(
             attestation_id="",
             intent_mandate_id=intent.mandate_id,
@@ -151,17 +172,26 @@ class EdgeGateway:
         try:
             attestation = self._mediator.request_attestation(intent, cart)
         except MediatorError as exc:
+            exc_lower = str(exc).lower()
+            is_transport = any(
+                kw in exc_lower
+                for kw in ("timeout", "connect", "unreachable", "refused", "unavailable")
+            )
+            error_code = (
+                SettlementErrorCode.MEDIATOR_UNAVAIL if is_transport
+                else SettlementErrorCode.ATTESTATION_FAILED
+            )
             logger.error("Mediator attestation failed: %s", exc)
             payment.status = MandateStatus.REJECTED
             payment.error = SettlementError(
-                SettlementErrorCode.ATTESTATION_FAILED,
+                error_code,
                 f"Mediator attestation failed: {exc}",
                 data={
                     "intent_mandate_id": intent.mandate_id,
                     "cart_mandate_id": cart.mandate_id,
                 },
             ).to_dict()
-            self._last_payment = payment
+            self._store.set_gateway_state("last_payment", payment.model_dump() if hasattr(payment, "model_dump") else payment.__dict__)
             return payment
 
         payment.attestation_id = attestation.attestation_id
@@ -171,7 +201,10 @@ class EdgeGateway:
             attestation, intent, cart,
             trusted_roots=self._trusted_roots,
         )
-        self._last_verification = verification
+        self._store.set_gateway_state(
+            "last_verification",
+            {"valid": verification.valid, "errors": verification.errors},
+        )
 
         if not verification.valid:
             logger.warning(
@@ -187,7 +220,7 @@ class EdgeGateway:
                     "verification_errors": verification.errors,
                 },
             ).to_dict()
-            self._last_payment = payment
+            self._store.set_gateway_state("last_payment", payment.model_dump() if hasattr(payment, "model_dump") else payment.__dict__)
 
             if self._on_payment_rejected:
                 self._on_payment_rejected(payment, verification)
@@ -197,7 +230,7 @@ class EdgeGateway:
         # ---- Release Payment Mandate ---------------------------------
         payment.status = MandateStatus.RELEASED
         payment.released_at = time.time()
-        self._last_payment = payment
+        self._store.set_gateway_state("last_payment", payment.model_dump() if hasattr(payment, "model_dump") else payment.__dict__)
 
         logger.info(
             "Payment Mandate RELEASED: id=%s attestation=%s tokens=%d",
@@ -226,7 +259,12 @@ class EdgeGateway:
         the payment mandate and the verification result.
         """
         payment = self.process_mandates(intent, cart)
-        return payment, self._last_verification
+        raw = self._store.get_gateway_state("last_verification")
+        verification = (
+            VerificationResult(valid=raw["valid"], errors=raw.get("errors"))
+            if raw else None
+        )
+        return payment, verification
 
     # ------------------------------------------------------------------
     # Internal callback wired to MandateInterceptors.on_mandates_ready
@@ -246,8 +284,17 @@ class EdgeGateway:
 
     @property
     def last_verification(self) -> VerificationResult | None:
-        return self._last_verification
+        raw = self._store.get_gateway_state("last_verification")
+        if raw:
+            return VerificationResult(valid=raw["valid"], errors=raw.get("errors"))
+        return None
 
     @property
     def last_payment(self) -> PaymentMandate | None:
-        return self._last_payment
+        raw = self._store.get_gateway_state("last_payment")
+        if raw and isinstance(raw, dict):
+            try:
+                return PaymentMandate(**{k: v for k, v in raw.items() if k != "error"})
+            except Exception:
+                return None
+        return None
