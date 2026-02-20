@@ -3,4 +3,5 @@
 google-adk[a2a]
 a2a-settlement
 httpx
+cryptography
 
