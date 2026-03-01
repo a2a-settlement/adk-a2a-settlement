@@ -23,12 +23,13 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e . --no-deps
-          pip install "google-adk[a2a]>=1.0.0" "a2a-settlement @ git+https://github.com/a2a-settlement/a2a-settlement.git@${A2A_SETTLEMENT_GIT_REF}" "httpx>=0.27" "cryptography>=43.0"
-          pip install -e ".[dev]" --no-deps
-          pip install pytest-cov
+          python -m pip install -e . --no-deps
+          python -m pip install "google-adk[a2a]>=1.0.0" "a2a-settlement @ git+https://github.com/a2a-settlement/a2a-settlement.git@${A2A_SETTLEMENT_GIT_REF}" "httpx>=0.27" "cryptography>=43.0"
+          python -m pip install -e ".[dev]" --no-deps
+      - name: Verify coverage plugin
+        run: python -m pip show pytest-cov
       - name: Run tests
-        run: pytest --cov=adk_a2a_settlement --cov-report=xml --cov-report=term-missing -q
+        run: python -m pytest --cov=adk_a2a_settlement --cov-report=xml --cov-report=term-missing -q
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
         with:
