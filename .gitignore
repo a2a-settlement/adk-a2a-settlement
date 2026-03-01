@@ -11,6 +11,8 @@ build/
 dist/
 *.egg-info/
 .coverage
+coverage.xml
+.tox/
 
 .ipynb_checkpoints/
 
