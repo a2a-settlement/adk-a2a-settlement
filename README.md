@@ -2,6 +2,8 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://python.org)
+[![CI](https://github.com/a2a-settlement/adk-a2a-settlement/actions/workflows/ci.yml/badge.svg)](https://github.com/a2a-settlement/adk-a2a-settlement/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/a2a-settlement/adk-a2a-settlement/graph/badge.svg)](https://codecov.io/gh/a2a-settlement/adk-a2a-settlement)
 
 **A2A Settlement Extension integration for Google's Agent Development Kit (ADK).** Adds escrow-based payment settlement to ADK agents — both for exposing your agents as paid services and for consuming other agents' paid services.
 
@@ -128,7 +130,7 @@ All settings come from environment variables:
 
 | Env var | Default | Description |
 |---------|---------|-------------|
-| `A2ASE_EXCHANGE_URL` | `https://sandbox.a2a-se.dev` | Exchange base URL |
+| `A2ASE_EXCHANGE_URL` | `https://sandbox.a2a-settlement.org` | Exchange base URL |
 | `A2ASE_API_KEY` | (required) | Your exchange API key |
 | `A2ASE_NETWORK` | `sandbox` | Network: sandbox, mainnet, devnet |
 | `A2ASE_TIMEOUT` | `30` | HTTP timeout in seconds |

@@ -18,7 +18,7 @@ class SettlementConfig(BaseModel):
 
     Reads from environment variables by default:
         A2ASE_EXCHANGE_URL    — exchange base URL (default: sandbox)
-        A2ASE_API_KEY         — required, get at sandbox.a2a-se.dev
+        A2ASE_API_KEY         — required, get at sandbox.a2a-settlement.org
         A2ASE_NETWORK         — "sandbox" or "mainnet" (default: sandbox)
         A2ASE_TIMEOUT         — HTTP timeout in seconds (default: 30)
         A2ASE_AUTO_ESCROW     — auto-create escrow on remote calls (default: true)
@@ -31,7 +31,7 @@ class SettlementConfig(BaseModel):
     """
 
     exchange_url: str = os.getenv(
-        "A2ASE_EXCHANGE_URL", "https://sandbox.a2a-se.dev"
+        "A2ASE_EXCHANGE_URL", "https://sandbox.a2a-settlement.org"
     )
     api_key: str = os.getenv("A2ASE_API_KEY", "")
     network: str = os.getenv("A2ASE_NETWORK", "sandbox")
