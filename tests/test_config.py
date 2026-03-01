@@ -15,7 +15,7 @@ class TestSettlementConfig:
     def test_defaults(self):
         with patch.dict(os.environ, {}, clear=True):
             cfg = SettlementConfig(api_key="test")
-            assert cfg.exchange_url == "https://sandbox.a2a-se.dev"
+            assert cfg.exchange_url == "https://sandbox.a2a-settlement.org"
             assert cfg.network == "sandbox"
             assert cfg.timeout_seconds == 30
             assert cfg.auto_escrow is True
