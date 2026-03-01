@@ -10,7 +10,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     env:
-      A2A_SETTLEMENT_GIT_REF: v0.6.0
+      A2A_SETTLEMENT_GIT_REF: main
     strategy:
       matrix:
         python-version: ["3.10", "3.11", "3.12"]
