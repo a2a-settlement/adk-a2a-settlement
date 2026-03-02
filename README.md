@@ -130,7 +130,7 @@ All settings come from environment variables:
 
 | Env var | Default | Description |
 |---------|---------|-------------|
-| `A2ASE_EXCHANGE_URL` | `https://sandbox.a2a-settlement.org` | Exchange base URL |
+| `A2ASE_EXCHANGE_URL` | `https://sandbox.a2a-settlement.org` | Exchange base URL (no `/v1`) |
 | `A2ASE_API_KEY` | (required) | Your exchange API key |
 | `A2ASE_NETWORK` | `sandbox` | Network: sandbox, mainnet, devnet |
 | `A2ASE_TIMEOUT` | `30` | HTTP timeout in seconds |
@@ -157,9 +157,12 @@ This repo wraps the [a2a-settlement](https://github.com/a2a-settlement/a2a-settl
 
 | Integration | Framework | Pattern |
 |------------|-----------|---------|
+| `langgraph-a2a-settlement` | LangGraph | Graph nodes + create_settlement_graph |
 | `crewai-a2a-settlement` | CrewAI | SettledCrew / SettledTask wrappers |
 | `litellm-a2a-settlement` | LiteLLM | CustomLogger hooks (pre/post call) |
 | **`adk-a2a-settlement`** | **Google ADK** | **to_settled_a2a() + SettledRemoteAgent + tools** |
+
+**Related:** [a2a-settlement-mcp](https://github.com/a2a-settlement/a2a-settlement-mcp) (MCP tools), [a2a-settlement-auth](https://github.com/a2a-settlement/a2a-settlement-auth) (OAuth), [a2a-settlement-mediator](https://github.com/a2a-settlement/a2a-settlement-mediator) (disputes).
 
 ### Provider verification flow
 
