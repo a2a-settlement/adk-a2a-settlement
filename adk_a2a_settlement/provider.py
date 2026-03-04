@@ -82,11 +82,14 @@ def to_settled_a2a(
                 developer_id=f"adk-{agent.name}",
                 developer_name=agent.name,
                 contact_email=f"{agent.name}@adk-a2a-settlement.dev",
-                description=getattr(agent, "description", None) or f"ADK agent: {agent.name}",
+                description=getattr(agent, "description", None)
+                or f"ADK agent: {agent.name}",
                 skills=_extract_skills(agent),
             )
             resolved_account_id = reg["account"]["id"]
-            logger.info("Agent %s registered with exchange: %s", agent.name, resolved_account_id)
+            logger.info(
+                "Agent %s registered with exchange: %s", agent.name, resolved_account_id
+            )
         except Exception as exc:
             logger.warning("Failed to register agent %s: %s", agent.name, exc)
             resolved_account_id = "unregistered"
@@ -115,7 +118,9 @@ def to_settled_a2a(
 
     logger.info(
         "Settlement-aware A2A server ready: agent=%s account=%s exchange=%s",
-        agent.name, resolved_account_id, cfg.exchange_url,
+        agent.name,
+        resolved_account_id,
+        cfg.exchange_url,
     )
 
     return a2a_app
@@ -161,7 +166,9 @@ def verify_escrow(
             )
         return None
 
-    exchange: SettlementExchangeClient | None = getattr(agent, "_settlement_exchange", None)
+    exchange: SettlementExchangeClient | None = getattr(
+        agent, "_settlement_exchange", None
+    )
     account_id: str | None = getattr(agent, "_settlement_account_id", None)
 
     if not exchange:
@@ -219,7 +226,9 @@ def verify_escrow(
     if account_id and escrow.get("provider_id") != account_id:
         logger.warning(
             "Escrow %s provider mismatch: expected=%s actual=%s",
-            escrow_id, account_id, escrow.get("provider_id"),
+            escrow_id,
+            account_id,
+            escrow.get("provider_id"),
         )
         if raise_on_error:
             raise SettlementError(
@@ -234,6 +243,52 @@ def verify_escrow(
 
     logger.info("Escrow %s verified: amount=%s", escrow_id, escrow.get("amount"))
     return escrow
+
+
+def deliver(
+    agent: Any,
+    escrow_id: str,
+    content: str,
+    provenance: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Submit a deliverable against a held escrow.
+
+    Call this after the provider agent completes work to record the
+    deliverable (and optional provenance) on the exchange.
+
+    Args:
+        agent: The ADK agent (must have been wrapped with ``to_settled_a2a``).
+        escrow_id: The escrow to deliver against.
+        content: The deliverable content.
+        provenance: Optional provenance dict with source_type, source_refs,
+            attestation_level, and optional signature.
+
+    Returns:
+        The exchange's deliver response dict.
+
+    Raises:
+        SettlementError if the agent has no exchange client configured.
+    """
+    exchange: SettlementExchangeClient | None = getattr(
+        agent, "_settlement_exchange", None
+    )
+    if not exchange:
+        raise SettlementError(
+            SettlementErrorCode.SETTLEMENT_NOT_ADVERTISED,
+            data={"agent": getattr(agent, "name", "?")},
+        )
+    try:
+        return exchange.deliver(
+            escrow_id=escrow_id,
+            content=content,
+            provenance=provenance,
+        )
+    except Exception as exc:
+        code = classify_exchange_error(exc)
+        raise SettlementError(
+            code,
+            data={"escrow_id": escrow_id, "detail": str(exc)},
+        ) from exc
 
 
 def _extract_skills(agent: Any) -> list[str]:

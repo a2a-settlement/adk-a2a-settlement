@@ -21,13 +21,14 @@ def tools(config):
 
 class TestSettlementTools:
 
-    def test_creates_seven_tools(self, tools):
+    def test_creates_eight_tools(self, tools):
         tool_list, _ = tools
-        assert len(tool_list) == 7
+        assert len(tool_list) == 8
         names = {t.__name__ for t in tool_list}
         assert names == {
             "check_balance",
             "create_escrow",
+            "deliver_escrow",
             "release_escrow",
             "refund_escrow",
             "dispute_escrow",
@@ -88,7 +89,7 @@ class TestSettlementTools:
 
     def test_release_escrow_success(self, tools):
         tool_list, mock_exchange = tools
-        release_escrow = tool_list[2]
+        release_escrow = tool_list[3]
 
         mock_exchange.release_escrow.return_value = {
             "escrow_id": "esc-001",
@@ -101,7 +102,7 @@ class TestSettlementTools:
 
     def test_dispute_escrow_success(self, tools):
         tool_list, mock_exchange = tools
-        dispute_escrow = tool_list[4]
+        dispute_escrow = tool_list[5]
 
         mock_exchange.dispute_escrow.return_value = {
             "escrow_id": "esc-001",
@@ -115,7 +116,7 @@ class TestSettlementTools:
 
     def test_lookup_agent_with_results(self, tools):
         tool_list, mock_exchange = tools
-        lookup_agent = tool_list[5]
+        lookup_agent = tool_list[6]
 
         mock_exchange.directory.return_value = {
             "bots": [
@@ -135,7 +136,7 @@ class TestSettlementTools:
 
     def test_lookup_agent_no_results(self, tools):
         tool_list, mock_exchange = tools
-        lookup_agent = tool_list[5]
+        lookup_agent = tool_list[6]
 
         mock_exchange.directory.return_value = {"bots": [], "count": 0}
 

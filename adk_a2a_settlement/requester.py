@@ -60,7 +60,9 @@ class SettlementInfo:
     required: bool = False
 
 
-def discover_settlement(agent_card_url: str, *, timeout: float = 10.0) -> SettlementInfo | None:
+def discover_settlement(
+    agent_card_url: str, *, timeout: float = 10.0
+) -> SettlementInfo | None:
     """
     Fetch an agent card and extract settlement extension info.
 
@@ -76,9 +78,7 @@ def discover_settlement(agent_card_url: str, *, timeout: float = 10.0) -> Settle
         return None
 
     extensions = (
-        card.get("capabilities", {}).get("extensions")
-        or card.get("extensions")
-        or []
+        card.get("capabilities", {}).get("extensions") or card.get("extensions") or []
     )
 
     for ext in extensions:
@@ -155,7 +155,11 @@ class EscrowTTLWatchdog:
             target=self._run, name="escrow-ttl-watchdog", daemon=True
         )
         self._thread.start()
-        logger.debug("TTL watchdog started (ttl=%ds, poll=%ds)", self._ttl_seconds, self._poll_interval)
+        logger.debug(
+            "TTL watchdog started (ttl=%ds, poll=%ds)",
+            self._ttl_seconds,
+            self._poll_interval,
+        )
 
     def stop(self) -> None:
         """Signal the watchdog to stop and wait for it to finish."""
@@ -237,7 +241,8 @@ class EscrowTTLWatchdog:
     def _expire(self, task_id: str, escrow_id: str, escrow: dict[str, Any]) -> None:
         logger.warning(
             "Settlement TTL exceeded — auto-refunding escrow %s for task %s",
-            escrow_id, task_id,
+            escrow_id,
+            task_id,
         )
         try:
             self._exchange.refund_escrow(
@@ -340,12 +345,15 @@ class SettledRemoteAgent:
 
         self._on_escrow_expired = on_escrow_expired
 
-    def _on_ttl_expired(self, task_id: str, escrow_id: str, escrow: dict[str, Any]) -> None:
+    def _on_ttl_expired(
+        self, task_id: str, escrow_id: str, escrow: dict[str, Any]
+    ) -> None:
         """Internal callback when the watchdog expires an escrow."""
         self._store.delete_escrow(task_id)
         logger.warning(
             "Task %s auto-released due to settlement TTL (%d min)",
-            task_id, self._config.settlement_ttl_minutes,
+            task_id,
+            self._config.settlement_ttl_minutes,
         )
         if self._on_escrow_expired:
             self._on_escrow_expired(task_id, escrow_id, escrow)
@@ -373,6 +381,7 @@ class SettledRemoteAgent:
         amount: int | None = None,
         ttl_minutes: int | None = None,
         deliverables: list[dict[str, Any]] | None = None,
+        required_attestation_level: str | None = None,
     ) -> dict[str, Any]:
         """
         Create an escrow for a task on this remote agent.
@@ -412,12 +421,17 @@ class SettledRemoteAgent:
                 task_type=task_type,
                 ttl_minutes=ttl_minutes or self._config.default_ttl_minutes,
                 deliverables=deliverables,
+                required_attestation_level=required_attestation_level,
             )
         except Exception as exc:
             code = classify_exchange_error(exc)
             raise SettlementError(
                 code,
-                data={"agent": self.name, "requested_amount": amount, "detail": str(exc)},
+                data={
+                    "agent": self.name,
+                    "requested_amount": amount,
+                    "detail": str(exc),
+                },
             ) from exc
 
         escrow_id = escrow["escrow_id"]
@@ -428,7 +442,10 @@ class SettledRemoteAgent:
 
         logger.info(
             "Escrow created: id=%s agent=%s amount=%d task=%s",
-            escrow_id, self.name, amount, task_id,
+            escrow_id,
+            self.name,
+            amount,
+            task_id,
         )
 
         return escrow
@@ -439,7 +456,9 @@ class SettledRemoteAgent:
             escrow_id=escrow["escrow_id"],
             amount=escrow["amount"],
             fee_amount=escrow["fee_amount"],
-            exchange_url=self._settlement_info.exchange_url if self._settlement_info else self._config.exchange_url,
+            exchange_url=self._settlement_info.exchange_url
+            if self._settlement_info
+            else self._config.exchange_url,
             expires_at=escrow["expires_at"],
         )
 
@@ -487,7 +506,12 @@ class SettledRemoteAgent:
         if self._watchdog:
             self._watchdog.untrack(task_id)
 
-        logger.info("Escrow refunded: task=%s escrow=%s reason=%s", task_id, escrow["escrow_id"], reason[:80])
+        logger.info(
+            "Escrow refunded: task=%s escrow=%s reason=%s",
+            task_id,
+            escrow["escrow_id"],
+            reason[:80],
+        )
         return result
 
     def get_active_escrows(self) -> dict[str, dict[str, Any]]:

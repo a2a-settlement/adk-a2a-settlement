@@ -21,12 +21,11 @@ Usage:
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 from a2a_settlement.client import SettlementExchangeClient
 
 from .config import SettlementConfig
-from .errors import SettlementError, SettlementErrorCode, classify_exchange_error
+from .errors import SettlementError, classify_exchange_error
 
 logger = logging.getLogger("adk_a2a_settlement.tools")
 
@@ -81,6 +80,7 @@ def create_settlement_tools(
         task_id: str,
         task_type: str = "",
         ttl_minutes: int = 60,
+        required_attestation_level: str = "",
     ) -> str:
         """Create an escrow to hold tokens for a task before sending it to a provider agent.
 
@@ -90,6 +90,8 @@ def create_settlement_tools(
             task_id: Unique identifier for the task.
             task_type: Type of task (e.g., "sentiment-analysis").
             ttl_minutes: Time-to-live in minutes before auto-expiry.
+            required_attestation_level: Provenance tier the provider must meet:
+                "self_declared", "signed", or "verifiable". Empty for no requirement.
 
         Returns:
             Escrow details including escrow_id needed for release or refund.
@@ -101,6 +103,7 @@ def create_settlement_tools(
                 task_id=task_id,
                 task_type=task_type or None,
                 ttl_minutes=ttl_minutes,
+                required_attestation_level=required_attestation_level or None,
             )
             return (
                 f"Escrow created successfully:\n"
@@ -198,7 +201,7 @@ def create_settlement_tools(
             result = exchange.directory(skill=skill or None, limit=10)
             bots = result.get("bots", [])
             if not bots:
-                return f"No agents found" + (f" with skill '{skill}'" if skill else "")
+                return "No agents found" + (f" with skill '{skill}'" if skill else "")
             lines = [f"Found {len(bots)} agent(s):"]
             for bot in bots:
                 lines.append(
@@ -243,9 +246,56 @@ def create_settlement_tools(
             se = SettlementError(code, data={"escrow_id": escrow_id})
             return f"Failed to get escrow status: {_format_tool_error(se)}"
 
+    def deliver_escrow(
+        escrow_id: str,
+        content: str,
+        source_type: str = "",
+        attestation_level: str = "",
+    ) -> str:
+        """Submit a deliverable against a held escrow (provider-side).
+
+        Call this after completing work to record the deliverable and optional
+        provenance on the exchange. The AI Mediator uses provenance for
+        verification during dispute resolution.
+
+        Args:
+            escrow_id: The escrow to deliver against.
+            content: The deliverable content.
+            source_type: How data was obtained: "api", "database", "web",
+                "generated", or "hybrid". Empty to skip provenance.
+            attestation_level: Trust tier: "self_declared", "signed", or
+                "verifiable". Empty defaults to "self_declared" if source_type
+                is provided.
+
+        Returns:
+            Delivery confirmation with escrow status.
+        """
+        try:
+            provenance = None
+            if source_type:
+                provenance = {
+                    "source_type": source_type,
+                    "source_refs": [],
+                    "attestation_level": attestation_level or "self_declared",
+                }
+            result = exchange.deliver(
+                escrow_id=escrow_id,
+                content=content,
+                provenance=provenance,
+            )
+            return (
+                f"Deliverable submitted:\n"
+                f"  Escrow ID: {result.get('escrow_id')}\n"
+                f"  Status: {result.get('status')}\n"
+                f"  Delivered at: {result.get('delivered_at')}"
+            )
+        except Exception as exc:
+            return f"Failed to deliver: {_format_tool_error(exc)}"
+
     return [
         check_balance,
         create_escrow,
+        deliver_escrow,
         release_escrow,
         refund_escrow,
         dispute_escrow,

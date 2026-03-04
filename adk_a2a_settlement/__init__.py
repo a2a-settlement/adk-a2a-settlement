@@ -34,8 +34,13 @@ from .mediator import (
     verify_merkle_proof,
     verify_rfc3161_timestamp,
 )
-from .provider import to_settled_a2a, verify_escrow
-from .requester import EscrowTTLWatchdog, SettledRemoteAgent, SettlementInfo, discover_settlement
+from .provider import deliver, to_settled_a2a, verify_escrow
+from .requester import (
+    EscrowTTLWatchdog,
+    SettledRemoteAgent,
+    SettlementInfo,
+    discover_settlement,
+)
 from .tools import create_settlement_tools
 
 __all__ = [
@@ -72,6 +77,7 @@ __all__ = [
     "verify_merkle_proof",
     "compute_merkle_root",
     # Provider
+    "deliver",
     "to_settled_a2a",
     "verify_escrow",
     # Requester + TTL watchdog
