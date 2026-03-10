@@ -44,6 +44,40 @@ def _format_tool_error(exc: Exception) -> str:
     return str(exc)
 
 
+def _run_grounding(content: str) -> dict | None:
+    """Run Google Search Grounding synchronously, returning provenance or None."""
+    import asyncio
+
+    try:
+        from .grounding import build_grounded_provenance, ground_deliverable
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop and loop.is_running():
+            import concurrent.futures
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                result = pool.submit(asyncio.run, ground_deliverable(content)).result(
+                    timeout=60
+                )
+        else:
+            result = asyncio.run(ground_deliverable(content))
+
+        provenance = build_grounded_provenance(result)
+        logger.info(
+            "Grounding: %d chunks, %.0f%% coverage",
+            len(result.chunks),
+            result.coverage * 100,
+        )
+        return provenance
+    except Exception:
+        logger.warning("Grounding failed — delivering without grounding", exc_info=True)
+        return None
+
+
 def create_settlement_tools(
     config: SettlementConfig | None = None,
 ) -> list:
@@ -251,6 +285,7 @@ def create_settlement_tools(
         content: str,
         source_type: str = "",
         attestation_level: str = "",
+        ground: bool = False,
     ) -> str:
         """Submit a deliverable against a held escrow (provider-side).
 
@@ -266,28 +301,45 @@ def create_settlement_tools(
             attestation_level: Trust tier: "self_declared", "signed", or
                 "verifiable". Empty defaults to "self_declared" if source_type
                 is provided.
+            ground: When true, run Google Search Grounding on the content
+                before delivery. Automatically sets source_type to "web"
+                and attestation_level to "verifiable", populating
+                grounding_metadata with citations and coverage.
 
         Returns:
             Delivery confirmation with escrow status.
         """
         try:
             provenance = None
-            if source_type:
+
+            if ground:
+                provenance = _run_grounding(content)
+
+            if provenance is None and source_type:
                 provenance = {
                     "source_type": source_type,
                     "source_refs": [],
                     "attestation_level": attestation_level or "self_declared",
                 }
+
             result = exchange.deliver(
                 escrow_id=escrow_id,
                 content=content,
                 provenance=provenance,
             )
+            grounding_info = ""
+            if provenance and provenance.get("grounding_metadata"):
+                gm = provenance["grounding_metadata"]
+                grounding_info = (
+                    f"\n  Grounding: {len(gm.get('chunks', []))} sources, "
+                    f"{gm.get('coverage', 0):.0%} coverage"
+                )
             return (
                 f"Deliverable submitted:\n"
                 f"  Escrow ID: {result.get('escrow_id')}\n"
                 f"  Status: {result.get('status')}\n"
                 f"  Delivered at: {result.get('delivered_at')}"
+                f"{grounding_info}"
             )
         except Exception as exc:
             return f"Failed to deliver: {_format_tool_error(exc)}"

@@ -291,6 +291,59 @@ def deliver(
         ) from exc
 
 
+async def ground_and_deliver(
+    agent: Any,
+    escrow_id: str,
+    content: str,
+    *,
+    model: str | None = None,
+) -> dict[str, Any]:
+    """Ground deliverable content against web sources, then deliver.
+
+    Convenience wrapper that chains :func:`ground_deliverable` and
+    :func:`build_grounded_provenance` from the grounding module, then
+    calls :func:`deliver` with the enriched provenance.
+
+    If grounding fails (e.g. network error, no grounding metadata
+    returned), the delivery proceeds without grounding provenance so
+    that the settlement flow is not blocked.
+
+    Args:
+        agent: The ADK agent (must have been wrapped with
+            ``to_settled_a2a``).
+        escrow_id: The escrow to deliver against.
+        content: The deliverable content.
+        model: Optional Gemini model for grounding (defaults to
+            ``gemini-2.5-flash``).
+
+    Returns:
+        The exchange's deliver response dict.
+    """
+    from .grounding import build_grounded_provenance, ground_deliverable
+
+    provenance = None
+    try:
+        kwargs: dict[str, Any] = {}
+        if model:
+            kwargs["model"] = model
+        result = await ground_deliverable(content, **kwargs)
+        provenance = build_grounded_provenance(result)
+        logger.info(
+            "Grounding complete for escrow %s: %d chunks, %.1f%% coverage",
+            escrow_id,
+            len(result.chunks),
+            result.coverage * 100,
+        )
+    except Exception:
+        logger.warning(
+            "Grounding failed for escrow %s — delivering without grounding",
+            escrow_id,
+            exc_info=True,
+        )
+
+    return deliver(agent, escrow_id, content, provenance)
+
+
 def _extract_skills(agent: Any) -> list[str]:
     """Extract skill names from an ADK agent's tools and sub_agents."""
     skills: list[str] = []

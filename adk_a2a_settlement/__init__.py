@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 from .callbacks import SettlementCallbacks
 from .config import SettlementConfig
@@ -34,7 +34,8 @@ from .mediator import (
     verify_merkle_proof,
     verify_rfc3161_timestamp,
 )
-from .provider import deliver, to_settled_a2a, verify_escrow
+from .grounding import GroundingResult, build_grounded_provenance, ground_deliverable
+from .provider import deliver, ground_and_deliver, to_settled_a2a, verify_escrow
 from .requester import (
     EscrowTTLWatchdog,
     SettledRemoteAgent,
@@ -76,8 +77,13 @@ __all__ = [
     "verify_rfc3161_timestamp",
     "verify_merkle_proof",
     "compute_merkle_root",
+    # Grounding
+    "GroundingResult",
+    "ground_deliverable",
+    "build_grounded_provenance",
     # Provider
     "deliver",
+    "ground_and_deliver",
     "to_settled_a2a",
     "verify_escrow",
     # Requester + TTL watchdog
