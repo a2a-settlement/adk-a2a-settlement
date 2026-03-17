@@ -162,7 +162,7 @@ This repo wraps the [a2a-settlement](https://github.com/a2a-settlement/a2a-settl
 | `litellm-a2a-settlement` | LiteLLM | CustomLogger hooks (pre/post call) |
 | **`adk-a2a-settlement`** | **Google ADK** | **to_settled_a2a() + SettledRemoteAgent + tools** |
 
-**Related:** [a2a-settlement-mcp](https://github.com/a2a-settlement/a2a-settlement-mcp) (MCP tools), [a2a-settlement-auth](https://github.com/a2a-settlement/a2a-settlement-auth) (OAuth), [a2a-settlement-mediator](https://github.com/a2a-settlement/a2a-settlement-mediator) (disputes).
+**Related:** [a2a-settlement-mcp](https://github.com/a2a-settlement/a2a-settlement-mcp) (MCP tools), [a2a-settlement-auth](https://github.com/a2a-settlement/a2a-settlement-auth) (OAuth), [a2a-settlement-mediator](https://github.com/a2a-settlement/a2a-settlement-mediator) (disputes), [settlebridge-ai](https://github.com/a2a-settlement/settlebridge-ai) (gateway), [mcp-trust-gateway](https://github.com/a2a-settlement/mcp-trust-gateway) (MCP trust), [otel-agent-provenance](https://github.com/a2a-settlement/otel-agent-provenance) (OTel provenance), [a2a-federation-rfc](https://github.com/a2a-settlement/a2a-federation-rfc) (federation spec).
 
 ### Provider verification flow
 
